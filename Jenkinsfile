@@ -2,13 +2,13 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION       = "ap-south-1"
-        AWS_ACCOUNT_ID   = "101762432072"
-        IMAGE_TAG        = "${env.BUILD_ID}"
+        AWS_REGION     = "ap-south-1"
+        AWS_ACCOUNT_ID = "101762432072"
+        IMAGE_TAG      = "${env.BUILD_ID}"
 
-        FRONTEND_REPO    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/studypal-frontend"
-        BACKEND_REPO     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/studypal-backend"
-        AI_REPO          = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/studypal-ai-service"
+        FRONTEND_REPO  = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/studypal-frontend"
+        BACKEND_REPO   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/studypal-backend"
+        AI_REPO        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/studypal-ai-service"
     }
 
     stages {
@@ -20,22 +20,22 @@ pipeline {
             }
         }
 
-        stage('Configure AWS Credentials') {
+        stage('AWS Login & ECR Auth') {
             steps {
-                withAWS(credentials: 'AWS Credentials', region: "${AWS_REGION}") {
+                withCredentials([
+                    aws(
+                        credentialsId: 'AWS Credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
                     sh """
-                        aws sts get-caller-identity
-                    """
-                }
-            }
-        }
+                    echo '✅ AWS Identity:'
+                    aws sts get-caller-identity --region $AWS_REGION
 
-        stage('Login to ECR') {
-            steps {
-                withAWS(credentials: 'aws-creds', region: "${AWS_REGION}") {
-                    sh """
-                        aws ecr get-login-password --region $AWS_REGION | \
-                        docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                    echo '✅ Logging into ECR...'
+                    aws ecr get-login-password --region $AWS_REGION | \
+                    docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
                     """
                 }
             }
@@ -44,9 +44,14 @@ pipeline {
         stage('Build Docker Images') {
             steps {
                 sh """
-                    docker build -t $FRONTEND_REPO:$IMAGE_TAG ./frontend
-                    docker build -t $BACKEND_REPO:$IMAGE_TAG ./backend
-                    docker build -t $AI_REPO:$IMAGE_TAG ./ai-service
+                echo '✅ Building Frontend Image...'
+                docker build -t $FRONTEND_REPO:$IMAGE_TAG ./frontend
+
+                echo '✅ Building Backend Image...'
+                docker build -t $BACKEND_REPO:$IMAGE_TAG ./backend
+
+                echo '✅ Building AI Service Image...'
+                docker build -t $AI_REPO:$IMAGE_TAG ./ai-service
                 """
             }
         }
@@ -54,31 +59,38 @@ pipeline {
         stage('Push Images to ECR') {
             steps {
                 sh """
-                    docker push $FRONTEND_REPO:$IMAGE_TAG
-                    docker push $BACKEND_REPO:$IMAGE_TAG
-                    docker push $AI_REPO:$IMAGE_TAG
+                echo '✅ Pushing Frontend...'
+                docker push $FRONTEND_REPO:$IMAGE_TAG
+
+                echo '✅ Pushing Backend...'
+                docker push $BACKEND_REPO:$IMAGE_TAG
+
+                echo '✅ Pushing AI Service...'
+                docker push $AI_REPO:$IMAGE_TAG
                 """
             }
         }
 
-        stage('Deploy Updated Containers (Same EC2)') {
+        stage('Deploy Updated Containers on Jenkins EC2') {
             steps {
                 sh """
-                    echo "Stopping Old Containers..."
-                    docker compose down
+                echo '✅ Stopping Old Containers...'
+                docker compose down || true
 
-                    echo "Pulling Latest Images..."
-                    docker pull $FRONTEND_REPO:$IMAGE_TAG
-                    docker pull $BACKEND_REPO:$IMAGE_TAG
-                    docker pull $AI_REPO:$IMAGE_TAG
+                echo '✅ Pulling New Images...'
+                docker pull $FRONTEND_REPO:$IMAGE_TAG
+                docker pull $BACKEND_REPO:$IMAGE_TAG
+                docker pull $AI_REPO:$IMAGE_TAG
 
-                    echo "Updating Compose Image Tags..."
-                    sed -i "s|studypal-frontend:.*|studypal-frontend:$IMAGE_TAG|g" docker-compose.yml
-                    sed -i "s|studypal-backend:.*|studypal-backend:$IMAGE_TAG|g" docker-compose.yml
-                    sed -i "s|studypal-ai-service:.*|studypal-ai-service:$IMAGE_TAG|g" docker-compose.yml
+                echo '✅ Updating docker-compose.yml image tags...'
+                sed -i "s|studypal-frontend:.*|studypal-frontend:$IMAGE_TAG|g" docker-compose.yml
+                sed -i "s|studypal-backend:.*|studypal-backend:$IMAGE_TAG|g" docker-compose.yml
+                sed -i "s|studypal-ai-service:.*|studypal-ai-service:$IMAGE_TAG|g" docker-compose.yml
 
-                    echo "Starting Updated Containers..."
-                    docker compose up -d
+                echo '✅ Starting updated containers...'
+                docker compose up -d
+
+                echo '✅ Deployment completed successfully!'
                 """
             }
         }
