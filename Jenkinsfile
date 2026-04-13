@@ -74,10 +74,15 @@ pipeline {
         stage('Deploy Updated Containers on Jenkins EC2') {
             steps {
                 sh """
-                echo '✅ Stopping Old Containers...'
+                echo '✅ Force Cleanup to Avoid Conflicts...'
+                docker ps -aq | xargs -r docker stop || true
+                docker ps -aq | xargs -r docker rm || true
+                docker network prune -f || true
+
+                echo '✅ Dropping Compose Project Containers...'
                 docker compose down || true
 
-                echo '✅ Pulling New Images...'
+                echo '✅ Pulling Latest Images from ECR...'
                 docker pull $FRONTEND_REPO:$IMAGE_TAG
                 docker pull $BACKEND_REPO:$IMAGE_TAG
                 docker pull $AI_REPO:$IMAGE_TAG
@@ -87,7 +92,7 @@ pipeline {
                 sed -i "s|studypal-backend:.*|studypal-backend:$IMAGE_TAG|g" docker-compose.yml
                 sed -i "s|studypal-ai-service:.*|studypal-ai-service:$IMAGE_TAG|g" docker-compose.yml
 
-                echo '✅ Starting updated containers...'
+                echo '✅ Starting Updated Containers...'
                 docker compose up -d
 
                 echo '✅ Deployment completed successfully!!'
